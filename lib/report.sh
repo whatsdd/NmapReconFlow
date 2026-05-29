@@ -1,0 +1,303 @@
+#!/usr/bin/env bash
+# NmapReconFlow - Summary report generation
+
+parse_nmap_ports() {
+    local file="$1"
+    [ -f "$file" ] || return 0
+    awk '/^[0-9]+\//{
+        split($1, a, "/"); port=a[1]; proto=a[2];
+        state=$2; service=$3;
+        ver=""; for(i=4;i<=NF;i++) ver=ver" "$i;
+        gsub(/^[ \t]+|[ \t]+$/,"",ver);
+        print port"|"proto"|"state"|"service"|"ver
+    }' "$file"
+}
+
+parse_vulns_from_file() {
+    local file="$1"
+    local confidence="$2"
+    [ -f "$file" ] || return 0
+    awk -v conf="$confidence" '
+        /CVE-[0-9]+-[0-9]+/ {
+            for(i=1;i<=NF;i++) {
+                if($i ~ /CVE-[0-9]+-[0-9]+/) {
+                    gsub(/[^A-Za-z0-9-]/,"",$i);
+                    print $i"|"conf
+                }
+            }
+        }
+    ' "$file" | sort -u
+}
+
+yaml_escape() {
+    local val="$1"
+    val="${val//\"/\\\"}"
+    printf '"%s"' "$val"
+}
+
+generate_report() {
+    local host="$1"
+    local report_file="summary.md"
+
+    $GENERATE_REPORT || return 0
+
+    printf "${GREEN}Generating summary report...${NC}\n"
+
+    local scan_date
+    scan_date="$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date '+%Y-%m-%dT%H:%M:%S')"
+
+    local elapsedEnd
+    elapsedEnd="$(date '+%H:%M:%S' | awk -F: '{print $1 * 3600 + $2 * 60 + $3}')"
+    local duration=$((elapsedEnd - elapsedStart))
+
+    # Collect all port data with discovery source
+    declare -A port_source=()
+    declare -a all_port_lines=()
+
+    if [ -f "nmap/Port_${host}.nmap" ]; then
+        while IFS='|' read -r port proto state service ver; do
+            [ -z "$port" ] && continue
+            port_source["${port}/${proto}"]="port_scan"
+            all_port_lines+=("${port}|${proto}|${state}|${service}|${ver}|port_scan")
+        done < <(parse_nmap_ports "nmap/Port_${host}.nmap")
+    fi
+
+    if [ -f "nmap/Script_${host}.nmap" ]; then
+        while IFS='|' read -r port proto state service ver; do
+            [ -z "$port" ] && continue
+            if [ -z "${port_source[${port}/${proto}]:-}" ]; then
+                port_source["${port}/${proto}"]="script_scan"
+                all_port_lines+=("${port}|${proto}|${state}|${service}|${ver}|script_scan")
+            else
+                # Update version info from script scan (more detailed)
+                local idx
+                for idx in "${!all_port_lines[@]}"; do
+                    if [[ "${all_port_lines[$idx]}" == "${port}|${proto}|"* ]]; then
+                        all_port_lines[$idx]="${port}|${proto}|${state}|${service}|${ver}|${port_source[${port}/${proto}]}"
+                        break
+                    fi
+                done
+            fi
+        done < <(parse_nmap_ports "nmap/Script_${host}.nmap")
+    fi
+
+    if [ -f "nmap/Full_${host}.nmap" ]; then
+        while IFS='|' read -r port proto state service ver; do
+            [ -z "$port" ] && continue
+            if [ -z "${port_source[${port}/${proto}]:-}" ]; then
+                port_source["${port}/${proto}"]="full_scan"
+                all_port_lines+=("${port}|${proto}|${state}|${service}|${ver}|full_scan")
+            fi
+        done < <(parse_nmap_ports "nmap/Full_${host}.nmap")
+    fi
+
+    if [ -f "nmap/Full_Extra_${host}.nmap" ]; then
+        while IFS='|' read -r port proto state service ver; do
+            [ -z "$port" ] && continue
+            if [ -z "${port_source[${port}/${proto}]:-}" ]; then
+                port_source["${port}/${proto}"]="full_scan"
+                all_port_lines+=("${port}|${proto}|${state}|${service}|${ver}|full_scan")
+            else
+                local idx
+                for idx in "${!all_port_lines[@]}"; do
+                    if [[ "${all_port_lines[$idx]}" == "${port}|${proto}|"* ]]; then
+                        all_port_lines[$idx]="${port}|${proto}|${state}|${service}|${ver}|${port_source[${port}/${proto}]}"
+                        break
+                    fi
+                done
+            fi
+        done < <(parse_nmap_ports "nmap/Full_Extra_${host}.nmap")
+    fi
+
+    if [ -f "nmap/UDP_${host}.nmap" ]; then
+        while IFS='|' read -r port proto state service ver; do
+            [ -z "$port" ] && continue
+            if [ -z "${port_source[${port}/${proto}]:-}" ]; then
+                port_source["${port}/${proto}"]="udp_scan"
+                all_port_lines+=("${port}|${proto}|${state}|${service}|${ver}|udp_scan")
+            fi
+        done < <(parse_nmap_ports "nmap/UDP_${host}.nmap")
+    fi
+
+    # Collect vulnerabilities
+    declare -a vuln_lines=()
+    if [ -f "nmap/CVEs_${host}.nmap" ]; then
+        while IFS='|' read -r cve conf; do
+            [ -z "$cve" ] && continue
+            vuln_lines+=("${cve}|confirmed")
+        done < <(parse_vulns_from_file "nmap/CVEs_${host}.nmap" "confirmed")
+    fi
+    if [ -f "nmap/Vulns_${host}.nmap" ]; then
+        while IFS='|' read -r cve conf; do
+            [ -z "$cve" ] && continue
+            local already=false
+            local v
+            for v in "${vuln_lines[@]}"; do
+                [[ "$v" == "${cve}|"* ]] && already=true && break
+            done
+            $already || vuln_lines+=("${cve}|probable")
+        done < <(parse_vulns_from_file "nmap/Vulns_${host}.nmap" "probable")
+    fi
+
+    # --- Write the report ---
+    {
+        # YAML front matter
+        echo "---"
+        echo "target: ${host}"
+        echo "hostname: ${urlIP:+${host}}"
+        echo "os_detected: ${osType:-unknown}"
+        echo "scan_date: \"${scan_date}\""
+        echo "scan_duration_seconds: ${duration}"
+        echo "scan_type: ${TYPE}"
+        echo "ports:"
+        for line in "${all_port_lines[@]}"; do
+            IFS='|' read -r port proto state service ver source <<< "$line"
+            echo "  - port: ${port}"
+            echo "    proto: ${proto}"
+            echo "    service: ${service}"
+            echo "    version: $(yaml_escape "${ver}")"
+            echo "    discovered_in: ${source}"
+        done
+        if [ ${#vuln_lines[@]} -gt 0 ]; then
+            echo "vulnerabilities:"
+            for v in "${vuln_lines[@]}"; do
+                IFS='|' read -r vid conf <<< "$v"
+                echo "  - id: ${vid}"
+                echo "    confidence: ${conf}"
+            done
+        else
+            echo "vulnerabilities: []"
+        fi
+        echo "recon_tools:"
+        for key in "${!RECON_TOOL_STATUS[@]}"; do
+            local tool_name="${key%%_*}"
+            local status="${RECON_TOOL_STATUS[$key]}"
+            local dur="${RECON_TOOL_DURATION[$key]:-0}"
+            echo "  - tool: ${tool_name}"
+            echo "    status: ${status}"
+            echo "    duration_seconds: ${dur}"
+        done
+        echo "phases:"
+        for phase in "${SCAN_PHASES[@]}"; do
+            local pstatus="${PHASE_STATUS[$phase]:-pending}"
+            local pdur=0
+            if [ -n "${PHASE_START[$phase]:-}" ] && [ -n "${PHASE_END[$phase]:-}" ]; then
+                pdur=$((PHASE_END[$phase] - PHASE_START[$phase]))
+            fi
+            echo "  - name: ${phase}"
+            echo "    status: ${pstatus}"
+            echo "    duration_seconds: ${pdur}"
+        done
+        echo "---"
+        echo ""
+
+        # Markdown body
+        echo "# Reconnaissance Report: ${host}"
+        echo ""
+        echo "**Date:** $(date '+%Y-%m-%d %H:%M')  "
+        echo "**Duration:** $(format_duration ${duration})  "
+        echo "**OS Detection:** ${osType:-unknown}  "
+        echo "**Scan Type:** ${TYPE}  "
+        echo ""
+
+        # Open Ports table
+        if [ ${#all_port_lines[@]} -gt 0 ]; then
+            echo "## Open Ports"
+            echo ""
+            echo "| Port | Proto | State | Service | Version | Discovered In |"
+            echo "|------|-------|-------|---------|---------|---------------|"
+            for line in "${all_port_lines[@]}"; do
+                IFS='|' read -r port proto state service ver source <<< "$line"
+                echo "| ${port} | ${proto} | ${state} | ${service} | ${ver} | ${source} |"
+            done
+            echo ""
+        fi
+
+        # Port Discovery Timeline
+        echo "## Port Discovery Timeline"
+        echo ""
+        local scan_names=("port_scan:Port Scan" "script_scan:Script Scan" "full_scan:Full Scan" "udp_scan:UDP Scan")
+        for sn in "${scan_names[@]}"; do
+            local skey="${sn%%:*}"
+            local slabel="${sn#*:}"
+            local found_ports=""
+            for line in "${all_port_lines[@]}"; do
+                IFS='|' read -r port proto state service ver source <<< "$line"
+                if [ "$source" = "$skey" ]; then
+                    [ -n "$found_ports" ] && found_ports+=", "
+                    found_ports+="${port}/${proto}"
+                fi
+            done
+            [ -n "$found_ports" ] && echo "- **${slabel}**: ${found_ports}"
+        done
+        echo ""
+
+        # Vulnerability Findings
+        if [ ${#vuln_lines[@]} -gt 0 ]; then
+            echo "## Vulnerability Findings"
+            echo ""
+            echo "| ID | Confidence |"
+            echo "|----|------------|"
+            for v in "${vuln_lines[@]}"; do
+                IFS='|' read -r vid conf <<< "$v"
+                echo "| ${vid} | ${conf} |"
+            done
+            echo ""
+        fi
+
+        # Recon Findings
+        if [ -d "recon" ] && [ "$(ls -A recon/ 2>/dev/null)" ]; then
+            echo "## Recon Findings"
+            echo ""
+            local rfile
+            for rfile in recon/*; do
+                [ -f "$rfile" ] || continue
+                local rname
+                rname="$(basename "$rfile")"
+                local rstatus="completed"
+                local rdur=""
+                for key in "${!RECON_TOOL_STATUS[@]}"; do
+                    if [[ "$key" == *"${rname}"* ]] || [[ "$key" == *"${rname%.txt}"* ]]; then
+                        rstatus="${RECON_TOOL_STATUS[$key]}"
+                        rdur="${RECON_TOOL_DURATION[$key]:-}"
+                        break
+                    fi
+                done
+                local dur_str=""
+                [ -n "$rdur" ] && dur_str=" ($(format_duration "$rdur"))"
+                local status_str=""
+                [ "$rstatus" = "timeout" ] && status_str=" **TIMEOUT**"
+
+                echo "### ${rname}${dur_str}${status_str}"
+                echo ""
+                echo '```'
+                head -n "${REPORT_MAX_TOOL_OUTPUT}" "$rfile" 2>/dev/null
+                local total_lines
+                total_lines="$(wc -l < "$rfile" 2>/dev/null)"
+                if [ "${total_lines:-0}" -gt "${REPORT_MAX_TOOL_OUTPUT}" ]; then
+                    echo "... (truncated, ${total_lines} total lines)"
+                fi
+                echo '```'
+                echo ""
+            done
+        fi
+
+        # Scan Phase Summary
+        echo "## Scan Phase Summary"
+        echo ""
+        echo "| Phase | Status | Duration |"
+        echo "|-------|--------|----------|"
+        for phase in "${SCAN_PHASES[@]}"; do
+            local pstatus="${PHASE_STATUS[$phase]:-pending}"
+            local pdur="--"
+            if [ -n "${PHASE_START[$phase]:-}" ] && [ -n "${PHASE_END[$phase]:-}" ]; then
+                pdur="$(format_duration $((PHASE_END[$phase] - PHASE_START[$phase])))"
+            fi
+            echo "| ${phase} | ${pstatus} | ${pdur} |"
+        done
+        echo ""
+
+    } > "${report_file}"
+
+    printf "${GREEN}Report saved to: ${OUTPUTDIR}/${report_file}${NC}\n"
+}

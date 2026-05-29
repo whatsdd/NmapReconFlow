@@ -1,129 +1,173 @@
-# nmapAutomator
+# NmapReconFlow
 
-A script you can run in the background!
-  
-![nmapAutomator](https://i.imgur.com/3cMJIPr.gif)
-  
-## Summary
+Automated reconnaissance workflow. Fire and forget.
 
-The main goal for this script is to automate the process of enumeration & recon that is run every time, and instead focus our attention on real pentesting.  
-  
-This will ensure two things:  
-1. Automate nmap scans. 
-2. Always have some recon running in the background. 
+*Based on [nmapAutomator](https://github.com/21y4d/nmapAutomator) by @21y4d*
 
-Once initial ports are found '*in 5-10 seconds*', we can start manually looking into those ports, and let the rest run in the background with no interaction from our side whatsoever.  
+## What's New
+
+NmapReconFlow is a major overhaul of nmapAutomator with these improvements:
+
+- **Timeout protection** — every scan and recon tool has a configurable wall-clock timeout. No more hanging nikto/gobuster sessions. Stuck scans are killed and the pipeline moves on.
+- **Autopilot mode** (`-a`) — run the entire pipeline unattended, zero prompts.
+- **Multi-target campaigns** (`-f targets.txt`) — give it a file of IPs and forget. Sequential by default, parallel with `-P N`.
+- **Progress dashboard** — real-time status of each scan phase with elapsed time.
+- **Summary report** — generates `summary.md` with YAML front matter (AI/tool readable) and markdown body (human readable). Includes port discovery timeline and finding confidence levels.
+- **Signal handling** — Ctrl+C cleans up all background processes. No more orphaned nmap jobs.
+- **Cross-platform** — works on macOS, Kali Linux, and Ubuntu.
+- **Configurable** — rate limits, timeouts, wordlist paths, tool preferences via config file.
 
 ## Features
 
-### Scans
-1. **Network** : Shows all live hosts in the host's network (~15 seconds)
-2. **Port**    : Shows all open ports (~15 seconds)
-3. **Script**  : Runs a script scan on found ports (~5 minutes)
-4. **Full**    : Runs a full range port scan, then runs a thorough scan on new ports (~5-10 minutes)
-5. **UDP**     : Runs a UDP scan "requires sudo" (~5 minutes)
-6. **Vulns**   : Runs CVE scan and nmap Vulns scan on all found ports (~5-15 minutes)
-7. **Recon**   : Suggests recon commands, then prompts to automatically run them
-8. **All**     : Runs all the scans (~20-30 minutes)
+### Scan Types
+| Type | Description | Time |
+|------|-------------|------|
+| Network | Discover live hosts on the network | ~15 seconds |
+| Port | Find all open ports | ~15 seconds |
+| Script | Version detection + NSE scripts on found ports | ~5 minutes |
+| Full | All 65535 ports + script scan on new ports | ~5-10 minutes |
+| UDP | UDP port scan (requires sudo) | ~5 minutes |
+| Vulns | CVE detection + vulnerability scripts | ~5-15 minutes |
+| Recon | Auto-recommend and run service-specific recon tools | varies |
+| All | Run everything | ~20-30 minutes |
 
-*Note: This is a reconnaissance tool, and it does not perform any exploitation.*
-
-### Automatic Recon
-With the `recon` option, nmapAutomator will automatically recommend and run the best recon tools for each found port.  
-If a recommended tool is missing from your machine, nmapAutomator will suggest how to install it.
-
-### Runs on any shell
-nmapAutomator is 100% POSIX compatible, so it can run on any `sh` shell, and on any unix-based machine (*even a 10 YO router!*), which makes nmapAutomator ideal for lateral movement recon.
-
-If you want to run nmapAutomator on a remote machine, simply download a static nmap binary from [this link](https://github.com/andrew-d/static-binaries/raw/master/binaries/linux/x86_64/nmap), or with [static-get](https://github.com/minos-org/minos-static), and transfer it to the remote machine. You can then use `-s/--static-nmap` to specify the path to the static nmap binary.
-
-### Remote Mode (Beta)
-With the `-r/--remote` flag nmapAutomator will run in Remote Mode, which is designed to run using POSIX shell commands only, without relying on any external tools.  
-Remote Mode is still under development. Only following scans currently work with `-r`:
-- [x] Network Scan (currently ping only)
-- [ ] Port Scan
-- [ ] Full Scan
-- [ ] UDP Scan
-- [ ] Recon Scan
-
-### Output
-nmapAutomator saves the output of each type of scan is saved into a separate file, under the output directory.  
-The entire script output is also saved, which you can view with `less -r outputDir/nmapAutomator_host_type.txt`, or you can simply `cat` it.
-
------
-  
-## Requirements:
-[ffuf](https://github.com/ffuf/ffuf), which we can install with:
+### Autopilot Mode
 ```bash
-sudo apt update
-sudo apt install ffuf -y
+./nmapReconFlow.sh -H 10.10.10.10 -t All -a
 ```
+Runs all scans unattended. Stuck tools are killed after their timeout (default 10 minutes for recon tools). The pipeline continues automatically.
 
-Or [Gobuster](https://github.com/OJ/gobuster) '*v3.0 or higher*', which we can install with:  
+### Multi-Target Campaigns
 ```bash
-sudo apt update
-sudo apt install gobuster -y
+# targets.txt: one IP or hostname per line, # for comments
+./nmapReconFlow.sh -f targets.txt -t All -a
+
+# Parallel (2 targets at a time)
+./nmapReconFlow.sh -f targets.txt -t All -a -P 2
 ```
+Each target gets its own output directory. A campaign summary is generated at the end.
 
-Other recon tools used within the script include:
-|[nmap Vulners](https://github.com/vulnersCom/nmap-vulners)|[sslscan](https://github.com/rbsec/sslscan)|[nikto](https://github.com/sullo/nikto)|[joomscan](https://github.com/rezasp/joomscan)|[wpscan](https://github.com/wpscanteam/wpscan)|
-|:-:|:-:|:-:|:-:|:-:|
-|[droopescan](https://github.com/droope/droopescan)|[smbmap](https://github.com/ShawnDEvans/smbmap)|[enum4linux](https://github.com/portcullislabs/enum4linux)|[dnsrecon](https://github.com/darkoperator/dnsrecon)|[odat](https://github.com/quentinhardy/odat)|
-|[smtp-user-enum](https://github.com/pentestmonkey/smtp-user-enum)|snmp-check|snmpwalk|ldapsearch||
+### Summary Report
+After scanning, `summary.md` is generated with:
+- **YAML front matter**: structured data for AI tools and scripts (ports, services, vulns, timing)
+- **Open ports table** with service versions and discovery source
+- **Port discovery timeline**: which scan found which ports
+- **Vulnerability findings** with confidence levels (confirmed/probable/potential)
+- **Recon tool output** (truncated, with timeout status)
+- **Scan phase summary** with durations
 
-  
-Most of these should be installed by default in [Parrot OS](https://www.parrotsec.org) and [Kali Linux](https://www.kali.org).  
-*If any recon recommended tools are found to be missing, they will be automatically omitted, and the user will be notified.*
-  
-## Installation:
+### Configuration
+Copy `nmapReconFlow.conf.example` to `./nmapReconFlow.conf` or `~/.nmapReconFlow.conf`:
 ```bash
-git clone https://github.com/21y4d/nmapAutomator.git
-sudo ln -s $(pwd)/nmapAutomator/nmapAutomator.sh /usr/local/bin/
+cp nmapReconFlow.conf.example nmapReconFlow.conf
+```
+Configurable: timeouts, nmap rate limits, wordlist paths, tool skip lists, parallelism, report options.
+
+## Requirements
+
+- **bash** 4.3+ (for associative arrays and `wait -n`)
+- **nmap**
+- **Recommended**: [ffuf](https://github.com/ffuf/ffuf) or [gobuster](https://github.com/OJ/gobuster)
+
+Other recon tools (installed automatically on Kali, install as needed on other distros):
+
+| Tool | Tool | Tool | Tool | Tool |
+|:----:|:----:|:----:|:----:|:----:|
+| [nmap-vulners](https://github.com/vulnersCom/nmap-vulners) | [sslscan](https://github.com/rbsec/sslscan) | [nikto](https://github.com/sullo/nikto) | [joomscan](https://github.com/rezasp/joomscan) | [wpscan](https://github.com/wpscanteam/wpscan) |
+| [droopescan](https://github.com/droope/droopescan) | [smbmap](https://github.com/ShawnDEvans/smbmap) | [enum4linux](https://github.com/portcullislabs/enum4linux) | [dnsrecon](https://github.com/darkoperator/dnsrecon) | [odat](https://github.com/quentinhardy/odat) |
+| [smtp-user-enum](https://github.com/pentestmonkey/smtp-user-enum) | snmp-check | snmpwalk | ldapsearch | |
+
+Missing tools are automatically detected and skipped with a warning.
+
+## Installation
+
+```bash
+git clone https://github.com/whatsdd/NmapReconFlow.git
+cd NmapReconFlow
+chmod +x nmapReconFlow.sh
+sudo ln -s "$(pwd)/nmapReconFlow.sh" /usr/local/bin/nmapReconFlow
 ```
 
------
-
-## Usage:
-```
-./nmapAutomator.sh -h
-Usage: nmapAutomator.sh -H/--host <TARGET-IP> -t/--type <TYPE>
-Optional: [-r/--remote <REMOTE MODE>] [-d/--dns <DNS SERVER>] [-o/--output <OUTPUT DIRECTORY>] [-s/--static-nmap <STATIC NMAP PATH>]
-
-Scan Types:
-	Network : Shows all live hosts in the host's network (~15 seconds)
-	Port    : Shows all open ports (~15 seconds)
-	Script  : Runs a script scan on found ports (~5 minutes)
-	Full    : Runs a full range port scan, then runs a thorough scan on new ports (~5-10 minutes)
-	UDP     : Runs a UDP scan "requires sudo" (~5 minutes)
-	Vulns   : Runs CVE scan and nmap Vulns scan on all found ports (~5-15 minutes)
-	Recon   : Suggests recon commands, then prompts to automatically run them
-	All     : Runs all the scans (~20-30 minutes)
+### macOS
+```bash
+brew install nmap
+# Install recon tools as needed
 ```
 
-**Example scans**:
-```
-./nmapAutomator.sh --host 10.1.1.1 --type All
-./nmapAutomator.sh -H 10.1.1.1 -t Basic
-./nmapAutomator.sh -H academy.htb -t Recon -d 1.1.1.1
-./nmapAutomator.sh -H 10.10.10.10 -t network -s ./nmap
+### Kali / Ubuntu
+```bash
+sudo apt update && sudo apt install nmap ffuf -y
 ```
 
-------
+## Usage
 
-## Upcoming Features
-- [x] Support URL/DNS - Thanks @KatsuragiCSL
-- [x] Add extensions fuzzing for http recon
-- [x] Add an nmap progress bar
-- [x] List missing tools in recon
-- [x] Add option to change output folder
-- [x] Save full script output to a file
-- [x] Improve performance and efficiency of the script - Thanks @caribpa
-- [x] Make nmapAutomater 100% POSIX compatible. - Massive Thanks to @caribpa
-- [x] Add network scanning type, so nmapAutomator can discover live hosts on the network.
-- [ ] Enable usage of multiple scan types in one scan.
-- [ ] Enable scanning of multiple hosts in one scan.
-- [ ] Fully implement Remote Mode on all scans
+```
+./nmapReconFlow.sh -h
 
+Usage: nmapReconFlow.sh -H/--host <TARGET-IP> -t/--type <TYPE>
+       nmapReconFlow.sh -f/--file <TARGETS-FILE> -t/--type <TYPE>
 
-**Feel free to send your pull requests :)**  
-*For any pull requests, please try to follow these [Contributing Guidelines](CONTRIBUTING.md).*
+Required:
+  -H, --host <TARGET>       Target IP or hostname
+  -f, --file <FILE>         File with targets (one per line)
+  -t, --type <TYPE>         Scan type
+
+Optional:
+  -a, --autopilot           Run unattended, no prompts
+  -d, --dns <DNS>           Custom DNS server
+  -o, --output <DIR>        Output directory
+  -s, --static-nmap <PATH>  Path to static nmap binary
+  -r, --remote              Remote mode (limited scans)
+  -c, --config <FILE>       Config file path
+  -P, --parallel <N>        Campaign parallelism (default: 1)
+  --no-report               Skip summary.md generation
+  -v, --version             Print version
+```
+
+### Examples
+```bash
+# Single target, all scans, autopilot
+./nmapReconFlow.sh -H 10.10.10.10 -t All -a
+
+# Quick port scan
+./nmapReconFlow.sh -H 10.10.10.10 -t Port
+
+# Recon with custom DNS
+./nmapReconFlow.sh -H academy.htb -t Recon -d 1.1.1.1
+
+# Multi-target campaign
+./nmapReconFlow.sh -f targets.txt -t All -a
+
+# Custom config and output dir
+./nmapReconFlow.sh -H 10.10.10.10 -t All -a -c custom.conf -o results/
+```
+
+### Legacy Compatibility
+The old `nmapAutomator.sh` flags still work. `Quick` maps to `Port`, `Basic` maps to `Script`.
+
+## Output Structure
+```
+target_ip/
+  nmap/
+    Port_target.nmap
+    Script_target.nmap
+    Full_target.nmap
+    UDP_target.nmap
+    CVEs_target.nmap
+    Vulns_target.nmap
+    Recon_target.nmap
+  recon/
+    nikto_target_80.txt
+    ffuf_target_80.txt
+    ...
+  summary.md                    # Human + AI readable report
+  nmapReconFlow_target_All.txt  # Full console output
+```
+
+## Contributing
+
+Pull requests welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+## License
+
+[MIT](LICENSE)

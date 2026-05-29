@@ -1,0 +1,55 @@
+# NmapReconFlow Configuration
+# Copy to ./nmapReconFlow.conf, ~/.nmapReconFlow.conf, or ~/.config/nmapReconFlow/config
+# All values shown are defaults. Uncomment and modify as needed.
+
+# ============================================================
+# Timeouts (seconds, 0 = no timeout)
+# ============================================================
+# TIMEOUT_NMAP_PORT=600         # Port scan: 10 minutes
+# TIMEOUT_NMAP_FULL=1800        # Full scan: 30 minutes
+# TIMEOUT_NMAP_SCRIPT=900       # Script scan: 15 minutes
+# TIMEOUT_NMAP_UDP=900          # UDP scan: 15 minutes
+# TIMEOUT_NMAP_VULNS=1200       # Vuln scan: 20 minutes
+# TIMEOUT_RECON_DEFAULT=600     # Per recon tool: 10 minutes
+# TIMEOUT_CAMPAIGN=0            # Entire campaign: no limit
+
+# ============================================================
+# Nmap Rate Limits
+# ============================================================
+# NMAP_MAX_RATE=500              # Max packets/sec for full scan
+# NMAP_TIMING=4                  # Timing template (0-5)
+# NMAP_MAX_RETRIES=1             # Max retries per probe
+# NMAP_MAX_SCAN_DELAY=20         # Max delay between probes (ms)
+# NMAP_MIN_CVSS=7.0              # Min CVSS score for CVE scan
+
+# ============================================================
+# Scan Behavior
+# ============================================================
+# DEFAULT_SCAN_TYPE=All          # Default scan type
+# AUTOPILOT=false                # Run without prompts
+
+# ============================================================
+# Multi-Target Campaigns
+# ============================================================
+# CAMPAIGN_PARALLEL=1            # Targets in parallel (1 = sequential)
+
+# ============================================================
+# Wordlists
+# ============================================================
+# WORDLIST_BASE_DIR=             # Override wordlist search path
+# WORDLIST_DIRB=dirb/common.txt  # Directory brute-force wordlist (relative to base)
+# WORDLIST_USERS=metasploit/unix_users.txt  # User enumeration wordlist
+
+# ============================================================
+# Tool Preferences
+# ============================================================
+# SKIP_RECON_TOOLS=              # Comma-separated tools to skip (e.g., odat,joomscan)
+# GOBUSTER_THREADS=30            # Gobuster thread count
+# FFUF_RATE=0                    # ffuf requests/sec (0 = unlimited)
+# WPSCAN_THROTTLE=0              # wpscan throttle (ms, 0 = none)
+
+# ============================================================
+# Reporting
+# ============================================================
+# GENERATE_REPORT=true           # Generate summary.md after scans
+# REPORT_MAX_TOOL_OUTPUT=200     # Max lines per tool in report
