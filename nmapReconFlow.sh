@@ -1,0 +1,243 @@
+#!/usr/bin/env bash
+# NmapReconFlow - Automated reconnaissance workflow
+# Based on nmapAutomator by @21y4d
+# https://github.com/whatsdd/NmapReconFlow
+
+set -o pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+for _lib in config timeout ui utils scans recon report campaign; do
+    # shellcheck disable=SC1090
+    source "${SCRIPT_DIR}/lib/${_lib}.sh"
+done
+
+detect_platform
+install_signal_handlers
+
+elapsedStart="$(date '+%H:%M:%S' | awk -F: '{print $1 * 3600 + $2 * 60 + $3}')"
+REMOTE=false
+AUTOPILOT=false
+TARGETS_FILE=""
+CLI_CONFIG=""
+POSITIONAL=""
+
+usage() {
+    echo
+    printf "${BOLD}${GREEN}NmapReconFlow v${NMAPRF_VERSION}${NC}\n"
+    echo
+    printf "${RED}Usage: $(basename "$0") -H/--host ${NC}<TARGET-IP>${RED} -t/--type ${NC}<TYPE>\n"
+    printf "${RED}       $(basename "$0") -f/--file ${NC}<TARGETS-FILE>${RED} -t/--type ${NC}<TYPE>\n"
+    printf "${YELLOW}\nRequired:\n"
+    printf "${YELLOW}  -H, --host ${NC}<TARGET>       ${YELLOW}Target IP or hostname\n"
+    printf "${YELLOW}  -f, --file ${NC}<FILE>         ${YELLOW}File with targets (one per line)\n"
+    printf "${YELLOW}  -t, --type ${NC}<TYPE>         ${YELLOW}Scan type (see below)\n"
+    printf "${YELLOW}\nOptional:\n"
+    printf "${YELLOW}  -a, --autopilot            ${NC}Run unattended, no prompts\n"
+    printf "${YELLOW}  -d, --dns ${NC}<DNS>            ${YELLOW}Custom DNS server\n"
+    printf "${YELLOW}  -o, --output ${NC}<DIR>         ${YELLOW}Output directory\n"
+    printf "${YELLOW}  -s, --static-nmap ${NC}<PATH>   ${YELLOW}Path to static nmap binary\n"
+    printf "${YELLOW}  -r, --remote               ${NC}Remote mode (limited scans)\n"
+    printf "${YELLOW}  -c, --config ${NC}<FILE>        ${YELLOW}Config file path\n"
+    printf "${YELLOW}  -P, --parallel ${NC}<N>         ${YELLOW}Campaign parallelism (default: 1)\n"
+    printf "${YELLOW}  --no-report                ${NC}Skip summary.md generation\n"
+    printf "${YELLOW}  -v, --version              ${NC}Print version\n"
+    printf "${YELLOW}  -h, --help                 ${NC}Show this help\n"
+    printf "${YELLOW}\nScan Types:\n"
+    printf "${YELLOW}  Network  ${NC}Shows all live hosts in the host's network ${YELLOW}(~15 seconds)\n"
+    printf "${YELLOW}  Port     ${NC}Shows all open ports ${YELLOW}(~15 seconds)\n"
+    printf "${YELLOW}  Script   ${NC}Runs a script scan on found ports ${YELLOW}(~5 minutes)\n"
+    printf "${YELLOW}  Full     ${NC}Full range port scan + script scan on new ports ${YELLOW}(~5-10 minutes)\n"
+    printf "${YELLOW}  UDP      ${NC}Runs a UDP scan (requires sudo) ${YELLOW}(~5 minutes)\n"
+    printf "${YELLOW}  Vulns    ${NC}Runs CVE scan and nmap Vulns scan ${YELLOW}(~5-15 minutes)\n"
+    printf "${YELLOW}  Recon    ${NC}Suggests and runs recon tools on found services\n"
+    printf "${YELLOW}  All      ${NC}Runs all scans ${YELLOW}(~20-30 minutes)\n"
+    printf "${NC}\n"
+    exit 1
+}
+
+# Parse flags
+while [ $# -gt 0 ]; do
+    key="$1"
+    case "${key}" in
+        -H|--host)
+            HOST="$2"; shift; shift ;;
+        -t|--type)
+            TYPE="$2"; shift; shift ;;
+        -d|--dns)
+            DNS="$2"; shift; shift ;;
+        -o|--output)
+            OUTPUTDIR="$2"; shift; shift ;;
+        -s|--static-nmap)
+            NMAPPATH="$2"; shift; shift ;;
+        -r|--remote)
+            REMOTE=true; shift ;;
+        -a|--autopilot)
+            AUTOPILOT=true; shift ;;
+        -f|--file)
+            TARGETS_FILE="$2"; shift; shift ;;
+        -P|--parallel)
+            CAMPAIGN_PARALLEL="$2"; shift; shift ;;
+        -c|--config)
+            CLI_CONFIG="$2"; shift; shift ;;
+        --no-report)
+            GENERATE_REPORT=false; shift ;;
+        -v|--version)
+            echo "NmapReconFlow v${NMAPRF_VERSION}"; exit 0 ;;
+        -h|--help)
+            usage ;;
+        *)
+            POSITIONAL="${POSITIONAL} $1"; shift ;;
+    esac
+done
+set -- ${POSITIONAL}
+
+# Legacy positional args
+[ -z "${HOST}" ] && HOST="$1"
+[ -z "${TYPE}" ] && TYPE="$2"
+
+# Legacy type aliases
+case "${TYPE}" in
+    [Qq]uick) TYPE="Port" ;;
+    [Bb]asic) TYPE="Script" ;;
+esac
+
+# Load configuration
+load_config
+
+# Set DNS
+detect_dns_server
+
+# Set output dir
+[ -z "${OUTPUTDIR:-}" ] && OUTPUTDIR="${HOST:-campaign}"
+
+# Detect nmap binary
+detect_nmap_binary
+
+# Campaign mode
+if [ -n "${TARGETS_FILE}" ]; then
+    if [ -z "${TYPE}" ]; then
+        printf "${RED}Scan type is required. Use -t/--type <TYPE>\n${NC}"
+        usage
+    fi
+    if ! case "${TYPE}" in [Nn]etwork|[Pp]ort|[Ss]cript|[Ff]ull|UDP|udp|[Vv]ulns|[Rr]econ|[Aa]ll) false;; esac then
+        run_campaign "${TARGETS_FILE}"
+        exit $?
+    else
+        printf "${RED}Invalid scan type: ${TYPE}\n${NC}"
+        usage
+    fi
+fi
+
+# Single target mode - validate args
+if [ -z "${TYPE}" ] || [ -z "${HOST}" ]; then
+    usage
+fi
+
+# Validate host format
+if ! [[ "${HOST}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]] && \
+   ! [[ "${HOST}" =~ ^(([[:alnum:]-]{1,63}\.)*[[:alpha:]]{2,6})$ ]]; then
+    printf "${RED}\nInvalid IP or URL!\n${NC}"
+    usage
+fi
+
+# Validate scan type
+if ! case "${TYPE}" in [Nn]etwork|[Pp]ort|[Ss]cript|[Ff]ull|UDP|udp|[Vv]ulns|[Rr]econ|[Aa]ll) false;; esac then
+    mkdir -p "${OUTPUTDIR}" && cd "${OUTPUTDIR}" && mkdir -p nmap/ || usage
+
+    main() {
+        assignPorts "${HOST}"
+        init_phases "${TYPE}"
+        header
+
+        case "${TYPE}" in
+            [Nn]etwork)
+                start_phase "Network"
+                networkScan "${HOST}"
+                end_phase "Network" $?
+                ;;
+            [Pp]ort)
+                start_phase "Port"
+                portScan "${HOST}"
+                end_phase "Port" $?
+                ;;
+            [Ss]cript)
+                if [ ! -f "nmap/Port_${HOST}.nmap" ]; then
+                    start_phase "Port"
+                    portScan "${HOST}"
+                    end_phase "Port" $?
+                fi
+                start_phase "Script"
+                scriptScan "${HOST}"
+                end_phase "Script" $?
+                ;;
+            [Ff]ull)
+                start_phase "Full"
+                fullScan "${HOST}"
+                end_phase "Full" $?
+                ;;
+            [Uu][Dd][Pp])
+                start_phase "UDP"
+                UDPScan "${HOST}"
+                end_phase "UDP" $?
+                ;;
+            [Vv]ulns)
+                if [ ! -f "nmap/Port_${HOST}.nmap" ]; then
+                    start_phase "Port"
+                    portScan "${HOST}"
+                    end_phase "Port" $?
+                fi
+                start_phase "Vulns"
+                vulnsScan "${HOST}"
+                end_phase "Vulns" $?
+                ;;
+            [Rr]econ)
+                if [ ! -f "nmap/Port_${HOST}.nmap" ]; then
+                    start_phase "Port"
+                    portScan "${HOST}"
+                    end_phase "Port" $?
+                fi
+                if [ ! -f "nmap/Script_${HOST}.nmap" ]; then
+                    start_phase "Script"
+                    scriptScan "${HOST}"
+                    end_phase "Script" $?
+                fi
+                start_phase "Recon"
+                recon "${HOST}"
+                end_phase "Recon" $?
+                ;;
+            [Aa]ll)
+                start_phase "Port"
+                portScan "${HOST}"
+                end_phase "Port" $?
+
+                start_phase "Script"
+                scriptScan "${HOST}"
+                end_phase "Script" $?
+
+                start_phase "Full"
+                fullScan "${HOST}"
+                end_phase "Full" $?
+
+                start_phase "UDP"
+                UDPScan "${HOST}"
+                end_phase "UDP" $?
+
+                start_phase "Vulns"
+                vulnsScan "${HOST}"
+                end_phase "Vulns" $?
+
+                start_phase "Recon"
+                recon "${HOST}"
+                end_phase "Recon" $?
+                ;;
+        esac
+
+        footer
+        generate_report "${HOST}"
+    }
+
+    main | tee "nmapReconFlow_${HOST}_${TYPE}.txt"
+else
+    printf "${RED}\nInvalid Type!\n${NC}"
+    usage
+fi
