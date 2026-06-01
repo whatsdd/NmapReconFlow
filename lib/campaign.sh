@@ -1,6 +1,32 @@
 #!/usr/bin/env bash
 # NmapReconFlow - Multi-target campaign orchestration
 
+run_single_target() {
+    local target="$1"
+    local target_dir="$2"
+
+    mkdir -p "${target_dir}" || return 1
+    cd "${target_dir}" || return 1
+    mkdir -p nmap/ || return 1
+
+    HOST="$target"
+    OUTPUTDIR="$target_dir"
+    elapsedStart="$(date +%s)"
+    commonPorts=""
+    allPorts=""
+    udpPorts=""
+    extraPorts=""
+    urlIP=""
+    subnet=""
+    osType=""
+    nmapType=""
+    pingable=true
+    RECON_TOOL_STATUS=()
+    RECON_TOOL_DURATION=()
+
+    main
+}
+
 run_campaign() {
     local targets_file="$1"
     local parallelism="${CAMPAIGN_PARALLEL:-1}"
@@ -18,7 +44,7 @@ run_campaign() {
         line="$(echo "$line" | sed 's/#.*//' | awk '{$1=$1};1')"
         [ -z "$line" ] && continue
         targets+=("$line")
-    done < "$targets_file"
+    done < "$targets_file" || { log_error "Failed to read ${targets_file}"; exit 1; }
 
     local total=${#targets[@]}
     if [ "$total" -eq 0 ]; then
@@ -44,13 +70,7 @@ run_campaign() {
             campaign_status["$target"]="running"
             campaign_start["$target"]="$(date +%s)"
 
-            (
-                export HOST="$target"
-                export OUTPUTDIR="${campaign_dir}/${target}"
-                mkdir -p "${OUTPUTDIR}" && cd "${OUTPUTDIR}" && mkdir -p nmap/
-                elapsedStart="$(date '+%H:%M:%S' | awk -F: '{print $1 * 3600 + $2 * 60 + $3}')"
-                main
-            )
+            (run_single_target "$target" "${campaign_dir}/${target}")
             local rc=$?
 
             campaign_end["$target"]="$(date +%s)"
@@ -63,15 +83,22 @@ run_campaign() {
             printf "${GREEN}=== Campaign: ${completed}/${total} targets complete ===${NC}\n"
         done
     else
-        local running=0
+        declare -A pid_to_target=()
+
         local idx=0
         for target in "${targets[@]}"; do
             ((idx++))
 
-            while [ $running -ge $parallelism ]; do
-                wait -n 2>/dev/null
-                ((running--))
-                ((completed++))
+            while [ "$(jobs -rp | wc -l)" -ge "$parallelism" ]; do
+                local finished_pid
+                wait -n -p finished_pid 2>/dev/null || true
+                if [ -n "${finished_pid:-}" ] && [ -n "${pid_to_target[$finished_pid]:-}" ]; then
+                    local ft="${pid_to_target[$finished_pid]}"
+                    campaign_end["$ft"]="$(date +%s)"
+                    campaign_status["$ft"]="done"
+                    unset pid_to_target["$finished_pid"]
+                    ((completed++))
+                fi
             done
 
             printf "${GREEN}=== Campaign: Starting ${target} (${idx}/${total}) ===${NC}\n"
@@ -79,39 +106,45 @@ run_campaign() {
             campaign_status["$target"]="running"
             campaign_start["$target"]="$(date +%s)"
 
-            (
-                export HOST="$target"
-                export OUTPUTDIR="${campaign_dir}/${target}"
-                mkdir -p "${OUTPUTDIR}" && cd "${OUTPUTDIR}" && mkdir -p nmap/
-                elapsedStart="$(date '+%H:%M:%S' | awk -F: '{print $1 * 3600 + $2 * 60 + $3}')"
-                main > "nmapReconFlow_${target}_${TYPE}.log" 2>&1
-            ) &
-            ((running++))
+            (run_single_target "$target" "${campaign_dir}/${target}" > "${campaign_dir}/${target}.log" 2>&1) &
+            pid_to_target[$!]="$target"
         done
 
-        wait
+        for pid in "${!pid_to_target[@]}"; do
+            wait "$pid" 2>/dev/null
+            local rc=$?
+            local ft="${pid_to_target[$pid]}"
+            campaign_end["$ft"]="$(date +%s)"
+            if [ $rc -eq 0 ]; then
+                campaign_status["$ft"]="done"
+            else
+                campaign_status["$ft"]="error"
+            fi
+            ((completed++))
+        done
     fi
 
-    generate_campaign_summary "${campaign_dir}" targets campaign_status campaign_start campaign_end
+    _campaign_generate_summary "${campaign_dir}" "${targets[*]}" campaign_status campaign_start campaign_end
 
     printf "\n${GREEN}${BOLD}=== Campaign Complete ===${NC}\n"
     printf "${YELLOW}Results in: ${campaign_dir}/${NC}\n"
     printf "${YELLOW}Summary: ${campaign_dir}/campaign_summary.md${NC}\n"
 }
 
-generate_campaign_summary() {
+_campaign_generate_summary() {
     local campaign_dir="$1"
-    local -n _targets=$2
+    local targets_str="$2"
     local -n _status=$3
     local -n _start=$4
     local -n _end=$5
 
+    read -ra _targets <<< "$targets_str"
     local summary_file="${campaign_dir}/campaign_summary.md"
 
     {
         echo "---"
         echo "campaign_date: \"$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date '+%Y-%m-%dT%H:%M:%S')\""
-        echo "scan_type: ${TYPE}"
+        echo "scan_type: \"${TYPE}\""
         echo "total_targets: ${#_targets[@]}"
         echo "targets:"
         for target in "${_targets[@]}"; do
@@ -120,7 +153,7 @@ generate_campaign_summary() {
             if [ -n "${_start[$target]:-}" ] && [ -n "${_end[$target]:-}" ]; then
                 dur=$((_end[$target] - _start[$target]))
             fi
-            echo "  - host: ${target}"
+            echo "  - host: \"${target}\""
             echo "    status: ${status}"
             echo "    duration_seconds: ${dur}"
 

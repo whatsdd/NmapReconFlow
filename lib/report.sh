@@ -31,7 +31,9 @@ parse_vulns_from_file() {
 
 yaml_escape() {
     local val="$1"
+    val="${val//\\/\\\\}"
     val="${val//\"/\\\"}"
+    val="${val//$'\n'/\\n}"
     printf '"%s"' "$val"
 }
 
@@ -47,7 +49,7 @@ generate_report() {
     scan_date="$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date '+%Y-%m-%dT%H:%M:%S')"
 
     local elapsedEnd
-    elapsedEnd="$(date '+%H:%M:%S' | awk -F: '{print $1 * 3600 + $2 * 60 + $3}')"
+    elapsedEnd="$(date +%s)"
     local duration=$((elapsedEnd - elapsedStart))
 
     # Collect all port data with discovery source
@@ -143,18 +145,18 @@ generate_report() {
     {
         # YAML front matter
         echo "---"
-        echo "target: ${host}"
-        echo "hostname: ${urlIP:+${host}}"
-        echo "os_detected: ${osType:-unknown}"
+        echo "target: $(yaml_escape "${host}")"
+        echo "hostname: $(yaml_escape "${urlIP:-${host}}")"
+        echo "os_detected: $(yaml_escape "${osType:-unknown}")"
         echo "scan_date: \"${scan_date}\""
         echo "scan_duration_seconds: ${duration}"
-        echo "scan_type: ${TYPE}"
+        echo "scan_type: $(yaml_escape "${TYPE}")"
         echo "ports:"
         for line in "${all_port_lines[@]}"; do
             IFS='|' read -r port proto state service ver source <<< "$line"
             echo "  - port: ${port}"
-            echo "    proto: ${proto}"
-            echo "    service: ${service}"
+            echo "    proto: $(yaml_escape "${proto}")"
+            echo "    service: $(yaml_escape "${service}")"
             echo "    version: $(yaml_escape "${ver}")"
             echo "    discovered_in: ${source}"
         done
