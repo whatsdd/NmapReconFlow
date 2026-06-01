@@ -20,7 +20,8 @@ networkScan() {
         done
         wait
         sed_inplace '/^$/d' "nmap/Network_${HOST}.nmap"
-        sort -t . -k 3,3n -k 4,4n "nmap/Network_${HOST}.nmap"
+        sort -t . -k 3,3n -k 4,4n -o "nmap/Network_${HOST}.nmap" "nmap/Network_${HOST}.nmap"
+        cat "nmap/Network_${HOST}.nmap"
     else
         printf "${YELLOW}No ping detected.. TCP Network Scan is not implemented yet in Remote mode.\n${NC}"
     fi

@@ -126,7 +126,7 @@ footer() {
     printf "${NC}\n\n"
 
     local elapsedEnd
-    elapsedEnd="$(date '+%H:%M:%S' | awk -F: '{print $1 * 3600 + $2 * 60 + $3}')"
+    elapsedEnd="$(date +%s)"
     local elapsedSeconds=$((elapsedEnd - elapsedStart))
 
     if [ ${elapsedSeconds} -gt 3600 ]; then

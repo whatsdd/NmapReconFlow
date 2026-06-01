@@ -134,7 +134,7 @@ nmapProgressBar() {
     local outputFile
     outputFile="$(echo "$nmap_cmd" | sed -e 's/.*-oN \(.*\).nmap.*/\1/').nmap"
     local tmpOutputFile="${outputFile}.tmp"
-    local start_epoch
+    local start_epoch nmap_rc=0 timed_out=false
     start_epoch="$(date +%s)"
 
     if [ ! -e "${outputFile}" ]; then
@@ -151,11 +151,12 @@ nmapProgressBar() {
         local elapsed_secs=$((now_epoch - start_epoch))
         if [ "$timeout_secs" -gt 0 ] && [ "$elapsed_secs" -ge "$timeout_secs" ]; then
             if [ -n "${nmap_pid:-}" ] && kill -0 "$nmap_pid" 2>/dev/null; then
-                kill -TERM "$nmap_pid" 2>/dev/null
+                _kill_tree "$nmap_pid" TERM
                 sleep 2
-                kill -KILL "$nmap_pid" 2>/dev/null
+                _kill_tree "$nmap_pid" KILL
             fi
             log_warning "nmap scan timed out after ${timeout_secs}s"
+            timed_out=true
             break
         fi
 
@@ -171,6 +172,7 @@ nmapProgressBar() {
 
     if [ -n "${nmap_pid:-}" ]; then
         wait "$nmap_pid" 2>/dev/null
+        nmap_rc=$?
         unset CHILD_PIDS["$nmap_pid"]
     fi
 
@@ -180,6 +182,9 @@ nmapProgressBar() {
         cat "${tmpOutputFile}"
     fi
     rm -f "${tmpOutputFile}"
+
+    $timed_out && return 124
+    return $nmap_rc
 }
 
 log_warning() {

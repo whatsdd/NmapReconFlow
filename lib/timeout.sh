@@ -2,9 +2,17 @@
 # NmapReconFlow - Timeout management and signal handling
 
 declare -A CHILD_PIDS=()
+_CLEANUP_RUNNING=false
+
+_kill_tree() {
+    local pid="$1"
+    local sig="${2:-TERM}"
+    kill -0 "$pid" 2>/dev/null || return 0
+    # Kill the process group if possible, fall back to single PID
+    kill -"$sig" -- -"$pid" 2>/dev/null || kill -"$sig" "$pid" 2>/dev/null || true
+}
 
 # Run a command with a wall-clock timeout
-# Usage: run_with_timeout <timeout_seconds> <label> <command...>
 # Returns: 0 on success, 124 on timeout, or the command's exit code
 run_with_timeout() {
     local timeout_secs="$1"
@@ -16,7 +24,7 @@ run_with_timeout() {
         return $?
     fi
 
-    "$@" &
+    setsid "$@" &
     local child_pid=$!
     CHILD_PIDS["$child_pid"]=1
 
@@ -24,11 +32,11 @@ run_with_timeout() {
         sleep "$timeout_secs"
         if kill -0 "$child_pid" 2>/dev/null; then
             log_warning "${label} exceeded timeout (${timeout_secs}s). Sending SIGTERM..."
-            kill -TERM "$child_pid" 2>/dev/null
+            _kill_tree "$child_pid" TERM
             sleep 5
             if kill -0 "$child_pid" 2>/dev/null; then
                 log_warning "${label} did not respond to SIGTERM. Sending SIGKILL..."
-                kill -KILL "$child_pid" 2>/dev/null
+                _kill_tree "$child_pid" KILL
             fi
         fi
     ) &
@@ -50,17 +58,16 @@ run_with_timeout() {
 }
 
 cleanup_and_exit() {
+    $_CLEANUP_RUNNING && return
+    _CLEANUP_RUNNING=true
+
     printf "\n${RED}Interrupted. Cleaning up background processes...${NC}\n" >&2
     for pid in "${!CHILD_PIDS[@]}"; do
-        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-            kill -TERM "$pid" 2>/dev/null
-        fi
+        _kill_tree "$pid" TERM
     done
     sleep 2
     for pid in "${!CHILD_PIDS[@]}"; do
-        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-            kill -KILL "$pid" 2>/dev/null
-        fi
+        _kill_tree "$pid" KILL
     done
     rm -f nmap/*.tmp 2>/dev/null
     printf "${YELLOW}Cleanup complete.${NC}\n" >&2

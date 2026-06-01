@@ -5,6 +5,13 @@
 
 set -o pipefail
 
+if [ -z "${BASH_VERSINFO[0]:-}" ] || [ "${BASH_VERSINFO[0]}" -lt 4 ] || \
+   { [ "${BASH_VERSINFO[0]}" -eq 4 ] && [ "${BASH_VERSINFO[1]}" -lt 3 ]; }; then
+    printf "NmapReconFlow requires bash 4.3+. Current: %s\n" "${BASH_VERSION:-unknown}" >&2
+    printf "macOS users: brew install bash\n" >&2
+    exit 1
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 for _lib in config timeout ui utils scans recon report campaign; do
     # shellcheck disable=SC1090
@@ -14,7 +21,7 @@ done
 detect_platform
 install_signal_handlers
 
-elapsedStart="$(date '+%H:%M:%S' | awk -F: '{print $1 * 3600 + $2 * 60 + $3}')"
+elapsedStart="$(date +%s)"
 REMOTE=false
 AUTOPILOT=false
 TARGETS_FILE=""
