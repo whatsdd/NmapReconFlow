@@ -62,7 +62,7 @@ scriptScan() {
 
         if [ -f "nmap/Script_${HOST}.nmap" ] && grep -q "Service Info: OS:" "nmap/Script_${HOST}.nmap"; then
             local serviceOS
-            serviceOS="$(sed -n '/Service Info/{s/.* \([^;]*\);.*/\1/p;q}' "nmap/Script_${HOST}.nmap")"
+            serviceOS="$(sed -n '/Service Info/s/.* \([^;]*\);.*/\1/p' "nmap/Script_${HOST}.nmap" | head -n 1)"
             if [ "${osType}" != "${serviceOS}" ]; then
                 osType="${serviceOS}"
                 printf "${NC}\n"

@@ -54,7 +54,20 @@ assignPorts() {
 }
 
 cmpPorts() {
-    extraPorts="$(echo ",${allPorts}," | sed 's/,\('"$(echo "${commonPorts}" | sed 's/,/,\\|/g')"',\)\+/,/g; s/^,\|,$//g')"
+    local -A common_set=()
+    local IFS=','
+    local p
+    for p in ${commonPorts}; do
+        common_set["$p"]=1
+    done
+    local result=""
+    for p in ${allPorts}; do
+        if [ -z "${common_set[$p]:-}" ]; then
+            [ -n "$result" ] && result+=","
+            result+="$p"
+        fi
+    done
+    extraPorts="$result"
 }
 
 header() {

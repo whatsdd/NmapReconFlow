@@ -161,10 +161,10 @@ nmapProgressBar() {
         fi
 
         local scanType percent elapsed remaining
-        scanType="$(tail -n 2 "${tmpOutputFile}" 2>/dev/null | sed -ne '/elapsed/{s/.*undergoing \(.*\) Scan.*/\1/p}')"
-        percent="$(tail -n 2 "${tmpOutputFile}" 2>/dev/null | sed -ne '/% done/{s/.*About \(.*\)\..*% done.*/\1/p}')"
-        elapsed="$(tail -n 2 "${tmpOutputFile}" 2>/dev/null | sed -ne '/elapsed/{s/Stats: \(.*\) elapsed.*/\1/p}')"
-        remaining="$(tail -n 2 "${tmpOutputFile}" 2>/dev/null | sed -ne '/remaining/{s/.* (\(.*\) remaining.*/\1/p}')"
+        scanType="$(tail -n 2 "${tmpOutputFile}" 2>/dev/null | sed -n '/elapsed/s/.*undergoing \(.*\) Scan.*/\1/p')"
+        percent="$(tail -n 2 "${tmpOutputFile}" 2>/dev/null | sed -n '/% done/s/.*About \(.*\)\..*% done.*/\1/p')"
+        elapsed="$(tail -n 2 "${tmpOutputFile}" 2>/dev/null | sed -n '/elapsed/s/Stats: \(.*\) elapsed.*/\1/p')"
+        remaining="$(tail -n 2 "${tmpOutputFile}" 2>/dev/null | sed -n '/remaining/s/.* (\(.*\) remaining.*/\1/p')"
         progressBar "${scanType:-No}" "${percent:-0}" "${elapsed:-0:00:00}" "${remaining:-0:00:00}"
         sleep "${refreshRate}"
     done
@@ -177,7 +177,7 @@ nmapProgressBar() {
     fi
 
     if [ -e "${outputFile}" ]; then
-        sed -n '/PORT.*STATE.*SERVICE/,/^# Nmap/H;${x;s/^\n\|\n[^\n]*\n# Nmap.*//gp}' "${outputFile}" | awk '!/^SF(:|-).*$/' | grep -v 'service unrecognized despite'
+        awk '/PORT.*STATE.*SERVICE/{found=1} found{if(/^# Nmap/){exit}; print}' "${outputFile}" | awk '!/^SF(:|-)/' | grep -v 'service unrecognized despite'
     else
         cat "${tmpOutputFile}"
     fi
